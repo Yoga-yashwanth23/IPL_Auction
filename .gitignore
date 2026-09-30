@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# stray tsc -b output that used to land next to vite.config.ts
+vite.config.js
+vite.config.d.ts
+
+# env files with real credentials
+.env
+.env.local
+
+# editor/OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json

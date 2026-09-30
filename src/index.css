@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 205 63% 9%;
+    --foreground: 42 45% 88%;
+    --border: 200 40% 22%;
+    --input: 200 40% 22%;
+    --ring: 174 68% 43%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-abyss text-parchment font-body antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(31, 182, 172, 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 90% 10%, rgba(201, 162, 75, 0.08), transparent),
+      linear-gradient(rgba(6, 24, 38, 0.82), rgba(6, 24, 38, 0.82)),
+      url("/images/app-background.webp");
+    background-repeat: no-repeat, no-repeat, no-repeat, no-repeat;
+    background-size: auto, auto, cover, cover;
+    background-position: center, center, center, center;
+    background-attachment: scroll, scroll, fixed, fixed;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display;
+  }
+
+  ::selection {
+    background: rgba(31, 182, 172, 0.35);
+  }
+}
+
+@layer components {
+  .rope-divider {
+    height: 3px;
+    background-image: repeating-linear-gradient(
+      90deg,
+      #b8895d 0px,
+      #b8895d 10px,
+      transparent 10px,
+      transparent 14px
+    );
+    opacity: 0.6;
+  }
+
+  .plank-panel {
+    background:
+      linear-gradient(180deg, rgba(15, 59, 92, 0.9), rgba(10, 42, 67, 0.95));
+    border: 1px solid rgba(184, 137, 93, 0.25);
+  }
+}

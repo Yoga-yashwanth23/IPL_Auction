@@ -61,7 +61,10 @@ export default function PlayersPage() {
       query = query.eq("role", roleFilter);
     }
     if (setFilter !== "all") {
-      query = query.eq("set_code", setFilter);
+      query = query.eq(
+        "set_code",
+        setFilter as NonNullable<PlayerRow["set_code"]>
+      );
     }
 
     query.then(({ data, count }) => {

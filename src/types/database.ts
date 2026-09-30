@@ -20,6 +20,7 @@ export interface Database {
         };
         Insert: Partial<Database["public"]["Tables"]["users"]["Row"]> & { id: string; email: string };
         Update: Partial<Database["public"]["Tables"]["users"]["Row"]>;
+        Relationships: [];
       };
       teams: {
         Row: {
@@ -38,6 +39,7 @@ export interface Database {
         };
         Insert: Partial<Database["public"]["Tables"]["teams"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["teams"]["Row"]>;
+        Relationships: [];
       };
       players: {
         Row: {
@@ -72,6 +74,7 @@ export interface Database {
           name: string;
         };
         Update: Partial<Database["public"]["Tables"]["players"]["Row"]>;
+        Relationships: [];
       };
       auctions: {
         Row: {
@@ -91,6 +94,7 @@ export interface Database {
         };
         Insert: Partial<Database["public"]["Tables"]["auctions"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["auctions"]["Row"]>;
+        Relationships: [];
       };
       auction_players: {
         Row: {
@@ -111,6 +115,7 @@ export interface Database {
           order_index: number;
         };
         Update: Partial<Database["public"]["Tables"]["auction_players"]["Row"]>;
+        Relationships: [];
       };
       bids: {
         Row: {
@@ -132,6 +137,7 @@ export interface Database {
           increment_used: number;
         };
         Update: Partial<Database["public"]["Tables"]["bids"]["Row"]>;
+        Relationships: [];
       };
       purchases: {
         Row: {
@@ -152,6 +158,7 @@ export interface Database {
           price: number;
         };
         Update: Partial<Database["public"]["Tables"]["purchases"]["Row"]>;
+        Relationships: [];
       };
       team_squads: {
         Row: {
@@ -170,6 +177,7 @@ export interface Database {
           price: number;
         };
         Update: Partial<Database["public"]["Tables"]["team_squads"]["Row"]>;
+        Relationships: [];
       };
       auction_events: {
         Row: {
@@ -187,7 +195,12 @@ export interface Database {
           event_type: string;
         };
         Update: Partial<Database["public"]["Tables"]["auction_events"]["Row"]>;
+        Relationships: [];
       };
     };
+    Views: { [_ in never]: never };
+    Functions: { [_ in never]: never };
+    Enums: { [_ in never]: never };
+    CompositeTypes: { [_ in never]: never };
   };
 }

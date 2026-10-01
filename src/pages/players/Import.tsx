@@ -96,6 +96,9 @@ export default function PlayersImportPage() {
           the platform matches each image to its player by filename. Every player is matched to their photo
           before the auction sets sail — nothing here is ever hard-coded.
         </p>
+        <Button asChild variant="outline" size="sm" className="mt-4">
+          <a href="/players/fix-images">Already imported? Add only the missing photos →</a>
+        </Button>
       </header>
 
       <StepBar step={step} />

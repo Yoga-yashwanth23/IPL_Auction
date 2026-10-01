@@ -118,6 +118,3 @@ set and defaults to sorting in full auction running order (set → base price de
 - **Stage 5** — History, Analytics, Settings, and a full pass of the Ocean Adventure visual theme
 
 Let me know when you've run the schema and tried the import — then we'll move to Stage 2.
-
-
-This is the entire project

@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   ArrowLeft,
+  ImageOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { to: "/display", label: "Presentation", icon: Tv },
   { to: "/players", label: "Players", icon: Users },
   { to: "/players/import", label: "Import Players", icon: UploadCloud },
+  { to: "/players/fix-images", label: "Fix Missing Photos", icon: ImageOff },
   { to: "/teams", label: "Teams", icon: Shield },
   { to: "/auction", label: "Auction Setup", icon: Radio },
   { to: "/history", label: "History", icon: History },

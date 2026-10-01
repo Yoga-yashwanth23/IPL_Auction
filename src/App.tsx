@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import Dashboard from "@/pages/Dashboard";
 import PlayersPage from "@/pages/players/Players";
 import PlayersImportPage from "@/pages/players/Import";
+import FixMissingImagesPage from "@/pages/players/FixImages";
 import TeamsPage from "@/pages/teams/Teams";
 import AuctionSetupPage from "@/pages/auction/AuctionSetup";
 import LiveAuctionPage from "@/pages/operator/LiveAuction";
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/players" element={<PlayersPage />} />
           <Route path="/players/import" element={<PlayersImportPage />} />
+          <Route path="/players/fix-images" element={<FixMissingImagesPage />} />
           <Route path="/teams" element={<TeamsPage />} />
           <Route path="/auction" element={<AuctionSetupPage />} />
           <Route path="/history" element={<HistoryPage />} />

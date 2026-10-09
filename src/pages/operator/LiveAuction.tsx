@@ -108,11 +108,21 @@ export default function LiveAuctionPage() {
   const [resuming, setResuming] = useState<"resume" | "new" | null>(null);
   const [setTransition, setSetTransition] = useState<SetTransition | null>(null);
   const [queueFilter, setQueueFilter] = useState<string>("all");
+  // True while another venue (or this one) has just decided a player and the next one
+  // hasn't been drawn yet — shows "next player coming up" instead of "Auction complete".
+  const [waitingNext, setWaitingNext] = useState(false);
 
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const setTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousSetCodeRef = useRef<string | null>(null);
+  // Multi-venue sync helpers (see the realtime effect further down).
+  const auctionRef = useRef<AuctionRow | null>(null);
+  const followerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRevealedRef = useRef<string | null>(null);
+  const advanceRef = useRef<() => Promise<void>>(async () => {});
+  const syncFromServerRef = useRef<(row: AuctionRow) => Promise<void>>(async () => {});
+  const remoteEventRef = useRef<(row: any) => Promise<void>>(async () => {});
 
   useEffect(
     () => () => {
@@ -223,9 +233,10 @@ export default function LiveAuctionPage() {
     setQueue((data ?? []) as unknown as QueueItem[]);
   }, []);
 
-  const loadCurrent = useCallback(async (auctionRow: AuctionRow) => {
+  const loadCurrent = useCallback(async (auctionRow: AuctionRow): Promise<void> => {
     setNoQueue(false);
     setComplete(false);
+    setWaitingNext(false);
 
     if (auctionRow.current_auction_player_id) {
       const { data } = await supabase
@@ -245,14 +256,15 @@ export default function LiveAuctionPage() {
     }
 
     // No current pointer (or it's stale) — pick the next player at random from whichever
-    // auction set is earliest in the fixed running order (M1 → M2 → BA → AR → ...) among
-    // the players still pending. The set-to-set sequence stays fixed; within a set the
-    // reveal order is randomized instead of following order_index.
+    // auction set is earliest in the fixed running order (M1 → M2 → BA → AR → ...).
+    // Players still marked "live" at this point are orphans (the pointer moved on without
+    // them, e.g. two screens drawing at once) — they are treated as still pending so they
+    // can never silently drop out of their set.
     const { data: pendingRows } = await supabase
       .from("auction_players")
       .select("id, player:players(set_order)")
       .eq("auction_id", auctionRow.id)
-      .eq("status", "pending");
+      .in("status", ["pending", "live"]);
 
     const pending = (pendingRows ?? []) as unknown as Array<{
       id: string;
@@ -274,10 +286,37 @@ export default function LiveAuctionPage() {
     const candidateIds = pending.filter((r) => (r.player?.set_order ?? 999) === minSetOrder).map((r) => r.id);
     const nextId = candidateIds[Math.floor(Math.random() * candidateIds.length)];
 
+    // Atomic claim: only move the shared pointer if it is still exactly what THIS screen
+    // saw. If the other venue drew a player a split-second earlier, the update matches
+    // nothing and we simply follow their pick instead of overwriting it.
+    const baseClaim = supabase
+      .from("auctions")
+      .update({ current_auction_player_id: nextId, current_bid: 0, highest_bidder_team_id: null, timer_remaining: auctionRow.timer_seconds })
+      .eq("id", auctionRow.id);
+    const { data: claimed } = await (
+      auctionRow.current_auction_player_id
+        ? baseClaim.eq("current_auction_player_id", auctionRow.current_auction_player_id)
+        : baseClaim.is("current_auction_player_id", null)
+    )
+      .select("*")
+      .maybeSingle();
+
+    if (!claimed) {
+      const { data: fresh } = await supabase.from("auctions").select("*").eq("id", auctionRow.id).maybeSingle();
+      if (fresh) {
+        setAuction(fresh);
+        if (fresh.current_auction_player_id && fresh.current_auction_player_id !== auctionRow.current_auction_player_id) {
+          await loadCurrent(fresh);
+        }
+      }
+      return;
+    }
+
     const { data: next } = await supabase
       .from("auction_players")
-      .select("*, player:players(*)")
+      .update({ status: "live" })
       .eq("id", nextId)
+      .select("*, player:players(*)")
       .maybeSingle();
 
     if (!next) {
@@ -286,18 +325,9 @@ export default function LiveAuctionPage() {
       return;
     }
 
-    await supabase
-      .from("auction_players")
-      .update({ status: "live" })
-      .eq("id", next.id);
-    await supabase
-      .from("auctions")
-      .update({ current_auction_player_id: next.id, current_bid: 0, highest_bidder_team_id: null, timer_remaining: auctionRow.timer_seconds })
-      .eq("id", auctionRow.id);
-
     maybeAnnounceSetChange((next as unknown as CurrentAuctionPlayer).player.set_code);
-    setCurrent({ ...(next as unknown as CurrentAuctionPlayer), status: "live" });
-    setAuction({ ...auctionRow, current_auction_player_id: next.id, current_bid: 0, highest_bidder_team_id: null });
+    setCurrent(next as unknown as CurrentAuctionPlayer);
+    setAuction(claimed);
   }, [maybeAnnounceSetChange]);
 
   const loadAll = useCallback(async () => {
@@ -366,6 +396,30 @@ export default function LiveAuctionPage() {
       return;
     }
 
+    // Optimistic lock: the bid only lands if the shared row still shows the bid this screen
+    // was looking at. If the other venue bid first, we refresh instead of overwriting it.
+    const { data: updatedAuction, error: updateError } = await supabase
+      .from("auctions")
+      .update({ current_bid: newBid, highest_bidder_team_id: team.id })
+      .eq("id", auction.id)
+      .eq("current_auction_player_id", current.id)
+      .eq("current_bid", auction.current_bid)
+      .select("*")
+      .maybeSingle();
+
+    if (updateError) {
+      setError(updateError.message);
+      setBusy(false);
+      return;
+    }
+    if (!updatedAuction) {
+      const { data: fresh } = await supabase.from("auctions").select("*").eq("id", auction.id).maybeSingle();
+      setError("The bid changed on another screen — refreshed. Please bid again.");
+      if (fresh) await syncFromServer(fresh);
+      setBusy(false);
+      return;
+    }
+
     const { error: bidError } = await supabase.from("bids").insert({
       auction_id: auction.id,
       auction_player_id: current.id,
@@ -373,22 +427,9 @@ export default function LiveAuctionPage() {
       amount: newBid,
       increment_used: increment,
     });
+    setBusy(false);
     if (bidError) {
       setError(bidError.message);
-      setBusy(false);
-      return;
-    }
-
-    const { data: updatedAuction, error: updateError } = await supabase
-      .from("auctions")
-      .update({ current_bid: newBid, highest_bidder_team_id: team.id })
-      .eq("id", auction.id)
-      .select("*")
-      .single();
-
-    setBusy(false);
-    if (updateError) {
-      setError(updateError.message);
       return;
     }
     setAuction(updatedAuction);
@@ -466,8 +507,19 @@ export default function LiveAuctionPage() {
     setBusy(false);
   }, [auction, loadCurrent, loadSquadStats, loadCounts, loadQueue]);
 
+  useEffect(() => {
+    auctionRef.current = auction;
+  }, [auction]);
+  useEffect(() => {
+    advanceRef.current = advance;
+  }, [advance]);
+
   const runAdvance = useCallback(async () => {
     clearAdvanceTimers();
+    if (followerTimerRef.current) {
+      clearTimeout(followerTimerRef.current);
+      followerTimerRef.current = null;
+    }
     setSoldInfo(null);
     await advance();
   }, [advance, clearAdvanceTimers]);
@@ -487,15 +539,167 @@ export default function LiveAuctionPage() {
     [clearAdvanceTimers, runAdvance]
   );
 
+  /** Mirrors whatever the shared auction row says right now. Called whenever the OTHER
+   *  venue changes anything (new player, new bid, sold, unsold) so both screens always
+   *  show the same player and bid. It never draws a player itself — only advance() does,
+   *  and that goes through the atomic claim in loadCurrent. */
+  const syncFromServer = useCallback(
+    async (row: AuctionRow) => {
+      setAuction(row);
+      if (row.status === "ended") {
+        setCurrent(null);
+        setWaitingNext(false);
+        loadCounts(row.id);
+        return;
+      }
+      if (row.current_auction_player_id) {
+        const { data } = await supabase
+          .from("auction_players")
+          .select("*, player:players(*)")
+          .eq("id", row.current_auction_player_id)
+          .maybeSingle();
+        if (data && (data.status === "pending" || data.status === "live")) {
+          if (followerTimerRef.current) {
+            clearTimeout(followerTimerRef.current);
+            followerTimerRef.current = null;
+          }
+          clearAdvanceTimers();
+          setSoldInfo(null);
+          setComplete(false);
+          setNoQueue(false);
+          setWaitingNext(false);
+          maybeAnnounceSetChange((data as unknown as CurrentAuctionPlayer).player.set_code);
+          setCurrent(data as unknown as CurrentAuctionPlayer);
+          setBusy(false);
+          return;
+        }
+      }
+      // Pointer is empty: a player was just decided. Wait for the next draw; if nobody
+      // draws within a few seconds (the other venue closed its tab, lost wifi…), draw it
+      // ourselves — the atomic claim guarantees only one screen wins.
+      setCurrent(null);
+      setWaitingNext(true);
+      if (followerTimerRef.current) clearTimeout(followerTimerRef.current);
+      followerTimerRef.current = setTimeout(() => {
+        followerTimerRef.current = null;
+        advanceRef.current();
+      }, AUTO_ADVANCE_MS + 1500);
+    },
+    [clearAdvanceTimers, loadCounts, maybeAnnounceSetChange]
+  );
+
+  /** Another screen sold a player — show the same SOLD reveal here too. */
+  const handleRemoteEvent = useCallback(
+    async (row: { event_type: string; auction_player_id: string | null; team_id: string | null; payload: { price?: number } | null }) => {
+      if (row.event_type !== "sold" || !row.auction_player_id) return;
+      if (lastRevealedRef.current === row.auction_player_id) return; // this screen did the sale
+      lastRevealedRef.current = row.auction_player_id;
+      const [{ data: ap }, { data: team }] = await Promise.all([
+        supabase.from("auction_players").select("player:players(name, image_url)").eq("id", row.auction_player_id).maybeSingle(),
+        row.team_id
+          ? supabase.from("teams").select("name, code").eq("id", row.team_id).maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
+      revealSold({
+        playerName: (ap as any)?.player?.name ?? "—",
+        playerImage: (ap as any)?.player?.image_url ?? null,
+        teamName: (team as any)?.name ?? "—",
+        teamCode: (team as any)?.code ?? "—",
+        price: row.payload?.price ?? 0,
+      });
+    },
+    [revealSold]
+  );
+
+  useEffect(() => {
+    syncFromServerRef.current = syncFromServer;
+    remoteEventRef.current = handleRemoteEvent;
+  }, [syncFromServer, handleRemoteEvent]);
+
+  // Realtime link between venues: every screen listens to the same auction rows, so a
+  // bid / sale / draw made at one venue shows up at the other within a moment. A slow
+  // 5-second poll backs this up in case a venue's websocket drops.
+  useEffect(() => {
+    if (!auction?.id) return;
+    const auctionId = auction.id;
+    let listTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshLists = () => {
+      if (listTimer) clearTimeout(listTimer);
+      listTimer = setTimeout(() => {
+        loadCounts(auctionId);
+        loadQueue(auctionId);
+        loadSquadStats(auctionId);
+      }, 400);
+    };
+
+    const channel = supabase
+      .channel(`operator-sync-${auctionId}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "auctions", filter: `id=eq.${auctionId}` }, (payload) => {
+        syncFromServerRef.current(payload.new as AuctionRow);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "auction_players", filter: `auction_id=eq.${auctionId}` }, refreshLists)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "team_squads", filter: `auction_id=eq.${auctionId}` }, refreshLists)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "teams" }, (payload) => {
+        const row = payload.new as TeamRow;
+        setTeams((prev) => prev.map((t) => (t.id === row.id ? row : t)));
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "auction_events", filter: `auction_id=eq.${auctionId}` }, (payload) => {
+        remoteEventRef.current(payload.new as any);
+      })
+      .subscribe();
+
+    const poll = setInterval(async () => {
+      const { data: row } = await supabase.from("auctions").select("*").eq("id", auctionId).maybeSingle();
+      const local = auctionRef.current;
+      if (row && local && (row.updated_at !== local.updated_at || row.current_auction_player_id !== local.current_auction_player_id)) {
+        syncFromServerRef.current(row);
+        refreshLists();
+      }
+    }, 5000);
+
+    return () => {
+      if (listTimer) clearTimeout(listTimer);
+      clearInterval(poll);
+      supabase.removeChannel(channel);
+    };
+  }, [auction?.id, loadCounts, loadQueue, loadSquadStats]);
+
   const finalizeSold = async () => {
-    if (!auction || !current || !auction.highest_bidder_team_id || busy) return;
+    if (!auction || !current || busy) return;
     setBusy(true);
     setError(null);
 
-    const price = auction.current_bid;
-    const teamId = auction.highest_bidder_team_id;
+    // Fresh read first: the other venue may already have decided this player, or bid.
+    const { data: fresh } = await supabase.from("auctions").select("*").eq("id", auction.id).maybeSingle();
+    if (!fresh || fresh.current_auction_player_id !== current.id || !fresh.highest_bidder_team_id) {
+      setError("This player was already decided (or the bid changed) on another screen — refreshed.");
+      if (fresh) await syncFromServer(fresh);
+      setBusy(false);
+      return;
+    }
+
+    const price = fresh.current_bid;
+    const teamId = fresh.highest_bidder_team_id;
     const overseas = isOverseas(current.player.country);
-    const team = teams.find((t) => t.id === teamId) ?? null;
+    const { data: freshTeam } = await supabase.from("teams").select("*").eq("id", teamId).maybeSingle();
+    const team = freshTeam ?? teams.find((t) => t.id === teamId) ?? null;
+
+    // Claim the sale: only succeeds if the player is still pending/live. Whichever screen
+    // gets here first wins; the other one gets zero rows back and just resyncs.
+    const { data: claimedRows } = await supabase
+      .from("auction_players")
+      .update({ status: "sold", final_price: price, sold_to_team_id: teamId })
+      .eq("id", current.id)
+      .in("status", ["pending", "live"])
+      .select("id");
+    if (!claimedRows || claimedRows.length === 0) {
+      setError("This player was already decided on another screen — refreshed.");
+      await syncFromServer(fresh);
+      setBusy(false);
+      return;
+    }
+
+    lastRevealedRef.current = current.id; // so our own "sold" event doesn't pop a second reveal
 
     const { error: purchaseError } = await supabase.from("purchases").insert({
       auction_id: auction.id,
@@ -506,11 +710,15 @@ export default function LiveAuctionPage() {
       is_overseas: overseas,
     });
 
-    // A duplicate-key error here means this player was already recorded as sold
-    // by an earlier click (e.g. a race from a double click) — don't re-write the
-    // purchase/purse/squad rows again, just resync and show the reveal.
+    // A duplicate-key error means the purchase was already recorded — don't re-write
+    // the squad/purse rows. Any other error: undo the claim so the player isn't lost.
     const isDuplicate = purchaseError?.code === "23505";
     if (purchaseError && !isDuplicate) {
+      await supabase
+        .from("auction_players")
+        .update({ status: "live", final_price: null, sold_to_team_id: null })
+        .eq("id", current.id);
+      lastRevealedRef.current = null;
       setError(purchaseError.message);
       setBusy(false);
       return;
@@ -529,11 +737,6 @@ export default function LiveAuctionPage() {
         await supabase.from("teams").update({ purse_remaining: team.purse_remaining - price }).eq("id", team.id);
       }
 
-      await supabase
-        .from("auction_players")
-        .update({ status: "sold", final_price: price, sold_to_team_id: teamId })
-        .eq("id", current.id);
-
       await supabase.from("auction_events").insert({
         auction_id: auction.id,
         event_type: "sold",
@@ -543,9 +746,7 @@ export default function LiveAuctionPage() {
       });
     }
 
-    // Clear the "current" pointer now that this player has been decided (whether this
-    // click did the deciding, or it was already decided by an earlier duplicate click) —
-    // otherwise the next advance keeps re-fetching this same finalized player forever.
+    // Clear the shared pointer now that this player is decided.
     const { data: clearedAuction } = await supabase
       .from("auctions")
       .update({ current_auction_player_id: null, current_bid: 0, highest_bidder_team_id: null })
@@ -568,10 +769,27 @@ export default function LiveAuctionPage() {
     setBusy(true);
     setError(null);
 
-    await supabase
+    // Make sure this screen is not looking at a stale player the other venue already decided.
+    const { data: fresh } = await supabase.from("auctions").select("*").eq("id", auction.id).maybeSingle();
+    if (!fresh || fresh.current_auction_player_id !== current.id) {
+      setError("This player was already decided on another screen — refreshed.");
+      if (fresh) await syncFromServer(fresh);
+      setBusy(false);
+      return;
+    }
+
+    const { data: claimedRows } = await supabase
       .from("auction_players")
       .update({ status: "unsold", re_auction_count: current.re_auction_count + 1 })
-      .eq("id", current.id);
+      .eq("id", current.id)
+      .in("status", ["pending", "live"])
+      .select("id");
+    if (!claimedRows || claimedRows.length === 0) {
+      setError("This player was already decided on another screen — refreshed.");
+      await syncFromServer(fresh);
+      setBusy(false);
+      return;
+    }
 
     await supabase.from("auction_events").insert({
       auction_id: auction.id,
@@ -579,8 +797,7 @@ export default function LiveAuctionPage() {
       auction_player_id: current.id,
     });
 
-    // Clear the "current" pointer so advance() doesn't just re-fetch this same
-    // now-unsold player again.
+    // Clear the shared pointer so the next draw doesn't re-fetch this player.
     await supabase
       .from("auctions")
       .update({ current_auction_player_id: null, current_bid: 0, highest_bidder_team_id: null })
@@ -892,6 +1109,16 @@ export default function LiveAuctionPage() {
               <Button asChild>
                 <a href="/auction">Build the queue in Auction Setup →</a>
               </Button>
+            </CardContent>
+          </Card>
+        ) : waitingNext && !complete && !current ? (
+          <Card>
+            <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-lagoon-bright" />
+              <p className="font-display text-xl text-parchment">Next player coming up…</p>
+              <p className="text-sm text-parchment/60">
+                {counts.sold} sold · {counts.unsold} unsold · {counts.pending} still pending.
+              </p>
             </CardContent>
           </Card>
         ) : complete || !current ? (

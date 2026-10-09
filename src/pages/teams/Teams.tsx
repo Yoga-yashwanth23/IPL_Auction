@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Pencil, RotateCcw, Shield } from "lucide-react";
+import { Loader2, Pencil, Shield } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { TeamRow } from "@/types";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,13 +16,14 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { cn, formatCr } from "@/lib/utils";
+import { loadTeamsWithPurse } from "@/features/auction/teamPurses";
+import { fetchVenueAuction, useVenueKey } from "@/lib/venue";
 
 type TeamFormState = {
   name: string;
   logo_url: string;
   primary_color: string;
   purse_total: string;
-  purse_remaining: string;
   squad_size_limit: string;
   squad_size_min: string;
   overseas_limit: string;
@@ -34,7 +35,6 @@ function toFormState(team: TeamRow): TeamFormState {
     logo_url: team.logo_url ?? "",
     primary_color: team.primary_color ?? "#1FB6AC",
     purse_total: String(team.purse_total),
-    purse_remaining: String(team.purse_remaining),
     squad_size_limit: String(team.squad_size_limit),
     squad_size_min: String(team.squad_size_min),
     overseas_limit: String(team.overseas_limit),
@@ -42,6 +42,7 @@ function toFormState(team: TeamRow): TeamFormState {
 }
 
 export default function TeamsPage() {
+  const venue = useVenueKey();
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<TeamRow | null>(null);
@@ -49,18 +50,19 @@ export default function TeamsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadTeams = useCallback(() => {
+  // Purse figures shown here belong to the venue currently selected in the sidebar.
+  const loadTeams = useCallback(async () => {
     setLoading(true);
-    supabase
-      .from("teams")
-      .select("*")
-      .order("name", { ascending: true })
-      .then(({ data, error }) => {
-        if (error) setError(error.message);
-        setTeams(data ?? []);
-        setLoading(false);
-      });
-  }, []);
+    const { data: auctionRow } = await fetchVenueAuction(venue);
+    if (auctionRow) {
+      setTeams(await loadTeamsWithPurse(auctionRow.id));
+    } else {
+      const { data, error } = await supabase.from("teams").select("*").order("name", { ascending: true });
+      if (error) setError(error.message);
+      setTeams(data ?? []);
+    }
+    setLoading(false);
+  }, [venue]);
 
   useEffect(() => {
     loadTeams();
@@ -83,12 +85,11 @@ export default function TeamsPage() {
     setError(null);
 
     const purseTotal = Number(form.purse_total);
-    const purseRemaining = Number(form.purse_remaining);
     const squadLimit = Number(form.squad_size_limit);
     const squadMin = Number(form.squad_size_min);
     const overseasLimit = Number(form.overseas_limit);
 
-    if ([purseTotal, purseRemaining, squadLimit, squadMin, overseasLimit].some((n) => Number.isNaN(n))) {
+    if ([purseTotal, squadLimit, squadMin, overseasLimit].some((n) => Number.isNaN(n))) {
       setError("All numeric fields must be valid numbers.");
       setSaving(false);
       return;
@@ -101,7 +102,7 @@ export default function TeamsPage() {
         logo_url: form.logo_url.trim() || null,
         primary_color: form.primary_color.trim() || null,
         purse_total: purseTotal,
-        purse_remaining: purseRemaining,
+        purse_remaining: purseTotal, // legacy column, unused: purses are derived per venue
         squad_size_limit: squadLimit,
         squad_size_min: squadMin,
         overseas_limit: overseasLimit,
@@ -115,14 +116,6 @@ export default function TeamsPage() {
     }
     closeEdit();
     loadTeams();
-  };
-
-  const resetPurse = async (team: TeamRow) => {
-    const { error } = await supabase
-      .from("teams")
-      .update({ purse_remaining: team.purse_total })
-      .eq("id", team.id);
-    if (!error) loadTeams();
   };
 
   return (
@@ -201,9 +194,6 @@ export default function TeamsPage() {
                     </div>
                   </div>
 
-                  <Button variant="outline" size="sm" onClick={() => resetPurse(team)} className="self-start">
-                    <RotateCcw className="h-3.5 w-3.5" /> Reset purse to full
-                  </Button>
                 </CardContent>
               </Card>
             );
@@ -263,15 +253,6 @@ export default function TeamsPage() {
                     inputMode="decimal"
                     value={form.purse_total}
                     onChange={(e) => setForm({ ...form, purse_total: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="purse-remaining">Purse remaining (₹ Lakh)</Label>
-                  <Input
-                    id="purse-remaining"
-                    inputMode="decimal"
-                    value={form.purse_remaining}
-                    onChange={(e) => setForm({ ...form, purse_remaining: e.target.value })}
                   />
                 </div>
                 <div>

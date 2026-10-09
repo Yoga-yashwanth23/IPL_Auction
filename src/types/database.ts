@@ -25,6 +25,7 @@ export interface Database {
       teams: {
         Row: {
           id: string;
+          owner_id?: string | null;
           code: string;
           name: string;
           logo_url: string | null;
@@ -44,6 +45,7 @@ export interface Database {
       players: {
         Row: {
           id: string;
+          owner_id?: string | null;
           external_player_id: string;
           name: string;
           country: string | null;
@@ -79,7 +81,9 @@ export interface Database {
       auctions: {
         Row: {
           id: string;
+          owner_id?: string | null;
           name: string;
+          venue: string | null;
           status: AuctionStatus;
           current_auction_player_id: string | null;
           current_bid: number;
@@ -99,6 +103,7 @@ export interface Database {
       auction_players: {
         Row: {
           id: string;
+          owner_id?: string | null;
           auction_id: string;
           player_id: string;
           order_index: number;
@@ -120,6 +125,7 @@ export interface Database {
       bids: {
         Row: {
           id: string;
+          owner_id?: string | null;
           auction_id: string;
           auction_player_id: string;
           team_id: string;
@@ -142,6 +148,7 @@ export interface Database {
       purchases: {
         Row: {
           id: string;
+          owner_id?: string | null;
           auction_id: string;
           auction_player_id: string;
           player_id: string;
@@ -163,6 +170,7 @@ export interface Database {
       team_squads: {
         Row: {
           id: string;
+          owner_id?: string | null;
           auction_id: string;
           team_id: string;
           player_id: string;
@@ -182,6 +190,7 @@ export interface Database {
       auction_events: {
         Row: {
           id: string;
+          owner_id?: string | null;
           auction_id: string;
           event_type: string;
           auction_player_id: string | null;
@@ -199,7 +208,9 @@ export interface Database {
       };
     };
     Views: { [_ in never]: never };
-    Functions: { [_ in never]: never };
+    Functions: {
+      ensure_workspace: { Args: Record<string, never>; Returns: { new_workspace: boolean; players: number } };
+    };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
   };

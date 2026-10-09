@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, AlertTriangle, RotateCcw, Gavel, Shield, Radio } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { AuctionRow } from "@/types";
+import { fetchVenueAuction, useVenueKey } from "@/lib/venue";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 
 export default function SettingsPage() {
+  const venue = useVenueKey();
   const [auction, setAuction] = useState<AuctionRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -17,15 +19,10 @@ export default function SettingsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("auctions")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const { data } = await fetchVenueAuction(venue);
     setAuction(data ?? null);
     setLoading(false);
-  }, []);
+  }, [venue]);
 
   useEffect(() => {
     load();
@@ -55,13 +52,7 @@ export default function SettingsPage() {
       supabase.from("auction_events").delete().eq("auction_id", auction.id),
     ]);
 
-    // Refund every team back to its starting purse.
-    const { data: allTeams } = await supabase.from("teams").select("id, purse_total");
-    if (allTeams) {
-      await Promise.all(
-        allTeams.map((t) => supabase.from("teams").update({ purse_remaining: t.purse_total }).eq("id", t.id))
-      );
-    }
+    // Purses refund automatically: they are derived from this venue's squads, just deleted above.
 
     // Reset the auction pointer so the next load picks the very first player.
     const { data: updated, error: resetError } = await supabase

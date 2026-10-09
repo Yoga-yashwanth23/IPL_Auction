@@ -26,6 +26,8 @@ import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn, formatCr, getBidIncrement } from "@/lib/utils";
 import { AUCTION_SET_SEQUENCE, getSetDef } from "@/features/auction/auctionSets";
+import { loadTeamsWithPurse } from "@/features/auction/teamPurses";
+import { fetchVenueAuction, useVenueKey } from "@/lib/venue";
 
 type CurrentAuctionPlayer = AuctionPlayerRow & { player: PlayerRow };
 
@@ -84,6 +86,7 @@ function isOverseas(country: string | null | undefined): boolean {
 }
 
 export default function LiveAuctionPage() {
+  const venue = useVenueKey();
   const [auction, setAuction] = useState<AuctionRow | null>(null);
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [current, setCurrent] = useState<CurrentAuctionPlayer | null>(null);
@@ -334,23 +337,22 @@ export default function LiveAuctionPage() {
     setLoading(true);
     setError(null);
 
-    const { data: auctionRow, error: auctionError } = await supabase
-      .from("auctions")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const { data: auctionRow, error: auctionError } = await fetchVenueAuction(venue);
 
     if (auctionError || !auctionRow) {
-      setError(auctionError?.message ?? "No auction has been configured yet.");
+      setAuction(null);
+      setError(
+        auctionError?.message ??
+          (venue ? `No auction found for venue "${venue}". Create it in Auction Setup.` : "No auction has been configured yet.")
+      );
       setLoading(false);
       return;
     }
 
-    const { data: teamRows } = await supabase.from("teams").select("*").order("name", { ascending: true });
+    const teamRows = await loadTeamsWithPurse(auctionRow.id);
 
     setAuction(auctionRow);
-    setTeams(teamRows ?? []);
+    setTeams(teamRows);
 
     // The operator ended this auction earlier — don't auto-load/advance a "current"
     // player. Just surface the resume-or-restart choice, with counts for context.
@@ -368,7 +370,7 @@ export default function LiveAuctionPage() {
       loadQueue(auctionRow.id),
     ]);
     setLoading(false);
-  }, [loadCurrent, loadSquadStats, loadCounts, loadQueue]);
+  }, [venue, loadCurrent, loadSquadStats, loadCounts, loadQueue]);
 
   useEffect(() => {
     loadAll();
@@ -493,13 +495,13 @@ export default function LiveAuctionPage() {
     if (!auction) return;
     // Re-fetch the auction row fresh rather than trusting the local `auction` state —
     // it may still hold the pointer/bid for the player that was just sold/unsold.
-    const [{ data: freshAuction }, { data: refreshedTeams }] = await Promise.all([
+    const [{ data: freshAuction }, refreshedTeams] = await Promise.all([
       supabase.from("auctions").select("*").eq("id", auction.id).maybeSingle(),
-      supabase.from("teams").select("*").order("name", { ascending: true }),
+      loadTeamsWithPurse(auction.id),
     ]);
     const auctionRow = freshAuction ?? auction;
     setAuction(auctionRow);
-    setTeams(refreshedTeams ?? []);
+    setTeams(refreshedTeams);
     await loadCurrent(auctionRow);
     await loadSquadStats(auctionRow.id);
     await loadCounts(auctionRow.id);
@@ -629,6 +631,7 @@ export default function LiveAuctionPage() {
         loadCounts(auctionId);
         loadQueue(auctionId);
         loadSquadStats(auctionId);
+        loadTeamsWithPurse(auctionId).then(setTeams);
       }, 400);
     };
 
@@ -639,10 +642,6 @@ export default function LiveAuctionPage() {
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "auction_players", filter: `auction_id=eq.${auctionId}` }, refreshLists)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "team_squads", filter: `auction_id=eq.${auctionId}` }, refreshLists)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "teams" }, (payload) => {
-        const row = payload.new as TeamRow;
-        setTeams((prev) => prev.map((t) => (t.id === row.id ? row : t)));
-      })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "auction_events", filter: `auction_id=eq.${auctionId}` }, (payload) => {
         remoteEventRef.current(payload.new as any);
       })
@@ -681,8 +680,8 @@ export default function LiveAuctionPage() {
     const price = fresh.current_bid;
     const teamId = fresh.highest_bidder_team_id;
     const overseas = isOverseas(current.player.country);
-    const { data: freshTeam } = await supabase.from("teams").select("*").eq("id", teamId).maybeSingle();
-    const team = freshTeam ?? teams.find((t) => t.id === teamId) ?? null;
+    const freshTeams = await loadTeamsWithPurse(auction.id);
+    const team = freshTeams.find((t) => t.id === teamId) ?? teams.find((t) => t.id === teamId) ?? null;
 
     // Claim the sale: only succeeds if the player is still pending/live. Whichever screen
     // gets here first wins; the other one gets zero rows back and just resyncs.
@@ -733,9 +732,7 @@ export default function LiveAuctionPage() {
         is_overseas: overseas,
       });
 
-      if (team) {
-        await supabase.from("teams").update({ purse_remaining: team.purse_remaining - price }).eq("id", team.id);
-      }
+      // No purse write needed: purse is derived from this auction's team_squads rows.
 
       await supabase.from("auction_events").insert({
         auction_id: auction.id,
@@ -852,8 +849,7 @@ export default function LiveAuctionPage() {
     }
 
     setAuction(updated);
-    const { data: refreshedTeams } = await supabase.from("teams").select("*").order("name", { ascending: true });
-    setTeams(refreshedTeams ?? []);
+    setTeams(await loadTeamsWithPurse(updated.id));
     // Pick up exactly where the auction left off — same current_auction_player_id,
     // current_bid, and highest_bidder_team_id as before it was ended.
     await Promise.all([
@@ -889,13 +885,7 @@ export default function LiveAuctionPage() {
       supabase.from("auction_events").delete().eq("auction_id", auction.id),
     ]);
 
-    // Refund every team back to its starting purse.
-    const { data: allTeams } = await supabase.from("teams").select("id, purse_total");
-    if (allTeams) {
-      await Promise.all(
-        allTeams.map((t) => supabase.from("teams").update({ purse_remaining: t.purse_total }).eq("id", t.id))
-      );
-    }
+    // Purses refund automatically: they are derived from this auction's squads, just deleted above.
 
     // Reset the auction pointer itself so the next load picks the very first player.
     const { data: updated, error: resetError } = await supabase
@@ -919,8 +909,7 @@ export default function LiveAuctionPage() {
     }
 
     setAuction(updated);
-    const { data: refreshedTeams } = await supabase.from("teams").select("*").order("name", { ascending: true });
-    setTeams(refreshedTeams ?? []);
+    setTeams(await loadTeamsWithPurse(updated.id));
     await Promise.all([
       loadCurrent(updated),
       loadSquadStats(updated.id),

@@ -53,7 +53,9 @@ export async function commitImport(
   // before firing off a burst of concurrent storage requests — otherwise the very
   // first wave of uploads can race ahead of session restoration and get rejected by
   // the storage RLS policy before the operator's auth token is attached.
-  await supabase.auth.getSession();
+  const { data: sessionData } = await supabase.auth.getSession();
+  const uid = sessionData.session?.user.id;
+  if (!uid) throw new Error("Not signed in — reload the page and try again.");
 
   // 1. Upload images for anything with a matched local asset.
   const toUpload = results.filter((r) => r.status === "matched" && r.matchedAsset);
@@ -65,7 +67,8 @@ export async function commitImport(
       const asset = r.matchedAsset!;
       // rowIndex is folded into the path so two rows that share (or are both missing)
       // a player_id can never collide on the same storage object.
-      const path = `${importBatchId}/${normalizedFileName(r.rowIndex, r.record.player_id, asset.fileName)}`;
+      // Images live in this visitor's own folder (storage rules only allow writes there).
+      const path = `${uid}/${importBatchId}/${normalizedFileName(r.rowIndex, r.record.player_id, asset.fileName)}`;
 
       let lastError: string | null = null;
       for (let attempt = 0; attempt <= UPLOAD_RETRIES; attempt++) {
@@ -113,6 +116,7 @@ export async function commitImport(
     });
 
     return {
+      owner_id: uid,
       external_player_id: String(r.record.player_id),
       name: String(r.record.name),
       country,
@@ -143,7 +147,7 @@ export async function commitImport(
   for (let b = 0; b < batches.length; b++) {
     const { error } = await supabase
       .from("players")
-      .upsert(batches[b], { onConflict: "external_player_id" });
+      .upsert(batches[b], { onConflict: "owner_id,external_player_id" });
     if (error) {
       batches[b].forEach((_, i) => failed.push({ row: b * BATCH_SIZE + i, message: error.message }));
     } else {

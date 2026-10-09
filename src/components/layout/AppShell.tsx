@@ -19,6 +19,8 @@ import {
   ImageOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { AuctionRow } from "@/types";
+import { createVenue, listVenues, storeVenue, useVenueKey } from "@/lib/venue";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -46,13 +48,74 @@ function BrandMark() {
   );
 }
 
+/** Picks which venue's auction every page below works on. Each venue is fully separate. */
+function VenueSwitcher() {
+  const venue = useVenueKey();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [venues, setVenues] = useState<AuctionRow[]>([]);
+  const [adding, setAdding] = useState(false);
+
+  useEffect(() => {
+    listVenues().then(setVenues);
+  }, [location.pathname]);
+
+  const active = venue && venues.some((v) => v.venue === venue) ? venue : venues[0]?.venue ?? null;
+
+  useEffect(() => {
+    if (active) storeVenue(active);
+  }, [active]);
+
+  if (venues.length === 0) return null;
+
+  const go = (key: string) => navigate(`${location.pathname}?venue=${key}`);
+
+  return (
+    <div className="px-3 pt-4">
+      <p className="mb-1 px-3 text-[11px] uppercase tracking-wide text-lagoon/70">Venue</p>
+      <div className="flex items-center gap-2 px-3">
+        <select
+          value={active ?? ""}
+          onChange={(e) => go(e.target.value)}
+          className="min-w-0 flex-1 rounded-md border border-wood-light/30 bg-deep/60 px-2 py-1.5 text-sm text-parchment"
+        >
+          {venues.map((v) => (
+            <option key={v.id} value={v.venue ?? ""}>
+              {v.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={adding}
+          title="Add another venue"
+          onClick={async () => {
+            setAdding(true);
+            const created = await createVenue();
+            setAdding(false);
+            if (created?.venue) {
+              setVenues(await listVenues());
+              go(created.venue);
+            }
+          }}
+          className="rounded-md border border-wood-light/30 px-2 py-1 text-sm text-parchment/80 hover:bg-cove disabled:opacity-50"
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
+  const venue = useVenueKey();
+  const suffix = venue ? `?venue=${encodeURIComponent(venue)}` : "";
   return (
     <nav className="flex-1 space-y-1 px-3 py-4">
       {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
         <NavLink
           key={to}
-          to={to}
+          to={`${to}${suffix}`}
           end={end}
           onClick={onNavigate}
           className={({ isActive }) =>
@@ -140,6 +203,7 @@ export function AppShell() {
                 </Dialog.Close>
               </div>
               <div className="rope-divider mx-6" />
+              <VenueSwitcher />
               <NavList onNavigate={() => setMobileNavOpen(false)} />
               <div className="px-6 py-4 text-[11px] text-parchment/40">Charted for smooth sailing ⚓</div>
             </Dialog.Content>
@@ -151,6 +215,7 @@ export function AppShell() {
       <aside className="hidden w-64 shrink-0 border-r border-wood-light/15 bg-deep/80 backdrop-blur-md md:flex md:flex-col">
         <BrandMark />
         <div className="rope-divider mx-6" />
+        <VenueSwitcher />
         <NavList />
         <div className="px-6 py-4 text-[11px] text-parchment/40">Charted for smooth sailing ⚓</div>
       </aside>

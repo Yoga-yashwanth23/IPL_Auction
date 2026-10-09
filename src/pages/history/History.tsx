@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatCr } from "@/lib/utils";
+import { fetchVenueAuction, useVenueKey } from "@/lib/venue";
 
 interface HistoryRow {
   id: string;
@@ -42,6 +43,7 @@ function toCsv(rows: HistoryRow[]): string {
 }
 
 export default function HistoryPage() {
+  const venue = useVenueKey();
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,12 +54,7 @@ export default function HistoryPage() {
     setLoading(true);
     setError(null);
 
-    const { data: auctionRow } = await supabase
-      .from("auctions")
-      .select("id")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const { data: auctionRow } = await fetchVenueAuction(venue);
 
     if (!auctionRow) {
       setLoading(false);
@@ -113,7 +110,7 @@ export default function HistoryPage() {
     const combined = [...soldRows, ...unsoldRows].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
     setRows(combined);
     setLoading(false);
-  }, []);
+  }, [venue]);
 
   useEffect(() => {
     load();

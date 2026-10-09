@@ -5,6 +5,7 @@ import type { TeamRow } from "@/types";
 import { AUCTION_SET_SEQUENCE } from "@/features/auction/auctionSets";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { cn, formatCr } from "@/lib/utils";
+import { fetchVenueAuction, useVenueKey } from "@/lib/venue";
 
 interface PurchaseRow {
   price: number;
@@ -15,6 +16,7 @@ interface PurchaseRow {
 }
 
 export default function AnalyticsPage() {
+  const venue = useVenueKey();
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [unsoldCount, setUnsoldCount] = useState(0);
@@ -27,12 +29,7 @@ export default function AnalyticsPage() {
     setLoading(true);
     setError(null);
 
-    const { data: auctionRow } = await supabase
-      .from("auctions")
-      .select("id")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const { data: auctionRow } = await fetchVenueAuction(venue);
 
     if (!auctionRow) {
       setLoading(false);
@@ -70,7 +67,7 @@ export default function AnalyticsPage() {
     setSetTotals(totals);
 
     setLoading(false);
-  }, []);
+  }, [venue]);
 
   useEffect(() => {
     load();

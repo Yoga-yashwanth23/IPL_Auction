@@ -9,12 +9,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatCr } from "@/lib/utils";
 import { AUCTION_SET_SEQUENCE, sortByAuctionOrder } from "@/features/auction/auctionSets";
+import { fetchVenueAuction, useVenueKey } from "@/lib/venue";
 
 type QueueRow = AuctionPlayerRow & { player: Pick<PlayerRow, "name" | "set_code" | "base_price" | "country"> };
 
 const DEFAULT_NAME = "IPL Mock Auction";
 
 export default function AuctionSetupPage() {
+  const venue = useVenueKey();
   const [auction, setAuction] = useState<AuctionRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -32,12 +34,7 @@ export default function AuctionSetupPage() {
 
   const loadAuction = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("auctions")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const { data, error } = await fetchVenueAuction(venue);
 
     if (error) {
       setError(error.message);
@@ -51,7 +48,7 @@ export default function AuctionSetupPage() {
     } else {
       const { data: created, error: createError } = await supabase
         .from("auctions")
-        .insert({ name: DEFAULT_NAME })
+        .insert({ name: DEFAULT_NAME, venue: venue ?? "venue-1" })
         .select("*")
         .single();
       if (createError || !created) {
@@ -66,7 +63,7 @@ export default function AuctionSetupPage() {
     setName(row.name);
     setTimerSeconds(String(row.timer_seconds));
     setLoading(false);
-  }, []);
+  }, [venue]);
 
   const loadQueue = useCallback(async (auctionId: string) => {
     setQueueLoading(true);
@@ -252,6 +249,18 @@ export default function AuctionSetupPage() {
         <div className="mb-4 rounded-md border border-coral/40 bg-coral/10 px-4 py-3 text-sm text-coral">{error}</div>
       )}
 
+      {auction?.venue && (
+        <div className="mb-6 rounded-md border border-lagoon/30 bg-deep/50 px-4 py-3 text-sm text-parchment/80">
+          <p className="mb-1 font-medium text-parchment">Links for this venue ({auction.name})</p>
+          <p className="break-all text-xs text-parchment/60">
+            Operator: <code>{window.location.origin}/operator?venue={auction.venue}</code>
+          </p>
+          <p className="break-all text-xs text-parchment/60">
+            Presentation screen: <code>{window.location.origin}/display?venue={auction.venue}</code>
+          </p>
+        </div>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
         {/* Auction config */}
         <Card>
@@ -326,7 +335,7 @@ export default function AuctionSetupPage() {
             {auction?.status === "live" && (
               <p className="text-xs text-parchment/50">
                 This auction is marked live. Bidding controls arrive with the operator console (Stage 3) — head to{" "}
-                <a href="/operator" className="text-lagoon underline underline-offset-4">
+                <a href={`/operator?venue=${auction.venue ?? ""}`} className="text-lagoon underline underline-offset-4">
                   Live Auction
                 </a>{" "}
                 once it ships.

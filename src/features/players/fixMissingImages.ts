@@ -84,7 +84,9 @@ export async function commitImageFixes(
   results: FixMatch[],
   onProgress?: (p: FixProgress) => void
 ): Promise<{ updated: number; failed: { name: string; message: string }[] }> {
-  await supabase.auth.getSession();
+  const { data: sessionData } = await supabase.auth.getSession();
+  const uid = sessionData.session?.user.id;
+  if (!uid) throw new Error("Not signed in — reload the page and try again.");
 
   const toSave = results.filter((r) => r.status === "matched" && r.matchedAsset);
   const failed: { name: string; message: string }[] = [];
@@ -96,7 +98,7 @@ export async function commitImageFixes(
       const asset = r.matchedAsset!;
       const ext = asset.fileName.split(".").pop() || "jpg";
       // Player's own uuid + timestamp: unique path, and no stale browser cache of an old image.
-      const path = `fixes/${r.player.id}_${Date.now()}.${ext}`;
+      const path = `${uid}/fixes/${r.player.id}_${Date.now()}.${ext}`;
 
       let lastError: string | null = null;
       for (let attempt = 0; attempt <= UPLOAD_RETRIES; attempt++) {

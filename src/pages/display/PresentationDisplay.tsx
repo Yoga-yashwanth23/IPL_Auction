@@ -3,6 +3,8 @@ import { Anchor, ArrowLeft, PartyPopper, XCircle, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { AuctionRow, AuctionPlayerRow, TeamRow, PlayerRow } from "@/types";
 import { cn, formatCr } from "@/lib/utils";
+import { loadTeamsWithPurse } from "@/features/auction/teamPurses";
+import { fetchVenueAuction, useVenueKey } from "@/lib/venue";
 
 type CurrentAuctionPlayer = AuctionPlayerRow & { player: PlayerRow };
 
@@ -23,6 +25,7 @@ interface FlashState {
 }
 
 export default function PresentationDisplayPage() {
+  const venue = useVenueKey();
   const [auction, setAuction] = useState<AuctionRow | null>(null);
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [current, setCurrent] = useState<CurrentAuctionPlayer | null>(null);
@@ -90,21 +93,16 @@ export default function PresentationDisplayPage() {
 
     const init = async () => {
       setLoading(true);
-      const { data: auctionRow } = await supabase
-        .from("auctions")
-        .select("*")
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
+      const { data: auctionRow } = await fetchVenueAuction(venue);
 
       if (!auctionRow) {
         setLoading(false);
         return;
       }
 
-      const { data: teamRows } = await supabase.from("teams").select("*").order("name", { ascending: true });
+      const teamRows = await loadTeamsWithPurse(auctionRow.id);
       setAuction(auctionRow);
-      setTeams(teamRows ?? []);
+      setTeams(teamRows);
       await Promise.all([refreshCurrent(auctionRow), refreshCounts(auctionRow.id), refreshTicker(auctionRow.id)]);
       setLoading(false);
 
@@ -117,14 +115,6 @@ export default function PresentationDisplayPage() {
             const row = payload.new as AuctionRow;
             setAuction(row);
             refreshCurrent(row);
-          }
-        )
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "teams" },
-          (payload) => {
-            const row = payload.new as TeamRow;
-            setTeams((prev) => prev.map((t) => (t.id === row.id ? row : t)));
           }
         )
         .subscribe();
@@ -141,6 +131,7 @@ export default function PresentationDisplayPage() {
               supabase.from("teams").select("name, code").eq("id", row.team_id).maybeSingle(),
             ]);
             showFlash({ kind: "sold", playerName: player?.name ?? "—", teamName: team?.name, teamCode: team?.code, price: row.price });
+            loadTeamsWithPurse(auctionRow.id).then(setTeams);
             refreshTicker(auctionRow.id);
             refreshCounts(auctionRow.id);
           }
@@ -174,7 +165,7 @@ export default function PresentationDisplayPage() {
       if (eventsChannel) supabase.removeChannel(eventsChannel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [venue]);
 
   if (loading) {
     return (
@@ -187,7 +178,7 @@ export default function PresentationDisplayPage() {
   if (!auction) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-abyss text-center text-parchment/60">
-        No auction has been configured yet.
+        {venue ? `No auction found for venue "${venue}".` : "No auction has been configured yet."}
       </div>
     );
   }
